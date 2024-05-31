@@ -40,7 +40,7 @@ fn main() -> Result<()> {
 fn compress_pdfs(data: &ArgMatches) -> Result<()> {
     println!("Checking input validity...");
 
-    let  pdfs = data
+    let pdfs = data
         .get_many::<String>("PDFs")
         .with_context(|| "No PDFs found to merge")?
         .peekable();
@@ -118,16 +118,22 @@ fn merge_pdfs(data: &ArgMatches) -> Result<()> {
     let documents = pdfs
         .map(|f| {
             if f.ends_with(".pdf") {
-                Document::load(f)
-                    .with_context(|| format!("File not found: {}", f))
-                    .unwrap()
+                (
+                    f.clone(),
+                    Document::load(f)
+                        .with_context(|| format!("File not found: {}", f))
+                        .unwrap(),
+                )
             } else {
                 let mut s = String::new();
                 s.push_str(f);
                 s.push_str(".pdf");
-                Document::load(s.as_str())
-                    .with_context(|| format!("File not found: {}", f))
-                    .unwrap()
+                (
+                    s.clone(),
+                    Document::load(s.as_str())
+                        .with_context(|| format!("File not found: {}", f))
+                        .unwrap(),
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -136,31 +142,45 @@ fn merge_pdfs(data: &ArgMatches) -> Result<()> {
 
     let mut max_id = 1;
     let mut pagenum = 1;
+
     let mut documents_pages = BTreeMap::new();
     let mut documents_objects = BTreeMap::new();
+
     let mut document = Document::with_version("1.5");
 
-    for mut doc in documents {
-        let mut first = false;
-        doc.renumber_objects_with(max_id);
+    for (name, mut doc) in documents {
+        let mut first = true;
 
+        doc.renumber_objects_with(max_id);
         max_id = doc.max_id + 1;
 
         documents_pages.extend(
             doc.get_pages()
                 .into_values()
                 .map(|object_id| {
-                    if !first {
-                        let bookmark = Bookmark::new(
-                            format!("Page_{}", pagenum),
-                            [0.0, 0.0, 1.0],
-                            0,
-                            object_id,
+                    if first {
+                        document.add_bookmark(
+                            Bookmark::new(
+                                format!("{name}, page {pagenum}"),
+                                [0.0, 0.0, 1.0],
+                                0,
+                                object_id,
+                            ),
+                            None,
                         );
-                        document.add_bookmark(bookmark, None);
-                        first = true;
-                        pagenum += 1;
+                        first = false;
+                    } else {
+                        document.add_bookmark(
+                            Bookmark::new(
+                                format!("{name}, page {pagenum}"),
+                                [0.0, 0.0, 1.0],
+                                0,
+                                object_id,
+                            ),
+                            None,
+                        );
                     }
+                    pagenum += 1;
 
                     (object_id, doc.get_object(object_id).unwrap().to_owned())
                 })
@@ -223,7 +243,7 @@ fn merge_pdfs(data: &ArgMatches) -> Result<()> {
     if pages_object.is_none() {
         println!("Pages root not found.");
 
-        return Ok(());
+        return Err(anyhow::anyhow!("Pages root not found"));
     }
 
     // Iterate over all "Page" objects and collect into the parent "Pages" created before
@@ -242,7 +262,7 @@ fn merge_pdfs(data: &ArgMatches) -> Result<()> {
     if catalog_object.is_none() {
         println!("Catalog root not found.");
 
-        return Ok(());
+        return Err(anyhow::anyhow!("Catalog root not found"));
     }
 
     let catalog_object = catalog_object.unwrap();
